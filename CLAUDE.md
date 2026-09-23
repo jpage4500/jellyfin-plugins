@@ -28,23 +28,39 @@ There is no test project — verification is manual through the container.
 
 ## Releasing
 
-`./package.sh <version>` (four numeric parts) builds Release, zips the assembly plus a generated
-`meta.json` into `dist/`, and adds the version to `manifest.json` — the repository file Jellyfin
-reads when a server adds this as a plugin repository. Publishing is manual and deliberate:
-
-```
-CHANGELOG="..." ./package.sh 1.0.1.0
-gh release create v1.0.1.0 dist/favorites-exporter_1.0.1.0.zip
-git add manifest.json && git commit -m "Release 1.0.1.0" && git push
+```bash
+./release.sh
 ```
 
-- `sourceUrl` is built from the git remote and the `v<version>` tag, so the release tag and the
-  version argument must match or the download 404s.
+No arguments: it picks the plugin (prompting only when there is more than one), bumps that
+plugin's patch version, asks for release notes, then builds, publishes the GitHub release and
+pushes the manifest commit. `--dry-run` does everything up to publishing and restores what it
+touched. `./package.sh <plugin-dir> <version>` is the build-and-hash half on its own.
+
+Layout follows from one constraint: **a Jellyfin repository is a single JSON array behind a
+single URL**, so `manifest.json` lives at the repo root and lists every plugin. Hence:
+
+- Root — `manifest.json`, and the `package.sh` / `release.sh` machinery, which holds no
+  knowledge of any particular plugin.
+- `<plugin>/plugin.json` — everything plugin-specific (id, guid, project, assembly, targetAbi).
+  A directory is a plugin if it has one; the scripts discover them, so adding a second plugin
+  means adding that file and nothing else.
+- `<plugin>/test-server.sh` — stays with its plugin; it mounts that plugin's build output.
+
+Plugins release independently: versions are tracked per GUID in the manifest and tags are
+prefixed with the plugin id (`favorites-exporter-v1.0.1.0`), so releasing one never disturbs
+another's entry.
+
+Other things that will bite:
+
+- A clean working tree is required — the zip has to correspond to a commit someone can check out.
+- The commit is pushed *before* the release is created, and the release targets that SHA, so a
+  failure cannot leave a tag pointing at something the remote has not seen.
 - Jellyfin verifies the zip against `checksum` (MD5) before installing, which is why the zip and
   the manifest entry are generated in one step — editing either by hand breaks installs.
 - The assembly must sit at the root of the zip; Jellyfin unpacks it straight into the plugin folder.
-- `TARGET_ABI` in the script is the *minimum server version*, not the plugin version. Too high and
-  older servers never see the release; too low and they install it and fail at load.
+- `targetAbi` is the *minimum server version*, not the plugin version. Too high and older servers
+  never see the release; too low and they install it and fail at load.
 
 ## Architecture
 

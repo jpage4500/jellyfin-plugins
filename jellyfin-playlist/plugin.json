@@ -1,0 +1,12 @@
+{
+  "id": "favorites-exporter",
+  "name": "Favorites Exporter",
+  "guid": "f9b7b8d4-8d9e-4b3a-9a2f-3d5c6e8a1b2c",
+  "category": "General",
+  "description": "Exports favorited music to portable .m3u playlists, and replays those favorites onto another server.",
+  "overview": "Back up and move your music favorites",
+  "project": "jellyfin-playlist.csproj",
+  "assembly": "jellyfin-playlist.dll",
+  "framework": "net10.0",
+  "targetAbi": "13.0.0.0"
+}
