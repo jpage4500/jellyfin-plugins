@@ -1,11 +1,12 @@
+using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Controller.Entities;
-using Jellyfin.Data.Enums;
+using MediaBrowser.Controller.Net;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,40 +17,34 @@ namespace JellyfinPlaylist
     [Authorize] // Requires the user to be logged in
     public class FavoritesController : ControllerBase
     {
+        private static readonly JsonSerializerOptions ManifestOptions = new()
+        {
+            PropertyNameCaseInsensitive = true
+        };
+
         private readonly ILibraryManager _libraryManager;
         private readonly IUserManager _userManager;
+        private readonly IUserDataManager _userDataManager;
+        private readonly IAuthorizationContext _authorizationContext;
 
-        public FavoritesController(ILibraryManager libraryManager, IUserManager userManager)
+        public FavoritesController(
+            ILibraryManager libraryManager,
+            IUserManager userManager,
+            IUserDataManager userDataManager,
+            IAuthorizationContext authorizationContext)
         {
             _libraryManager = libraryManager;
             _userManager = userManager;
+            _userDataManager = userDataManager;
+            _authorizationContext = authorizationContext;
         }
 
         // Endpoint to list the generated playlists
         [HttpGet("Playlists")]
         public ActionResult<IEnumerable<GeneratedPlaylist>> GetPlaylists()
         {
-            var firstTrackPath = _libraryManager.GetItemList(new InternalItemsQuery
-            {
-                IncludeItemTypes = new[] { BaseItemKind.Audio },
-                IsFolder = false
-            })
-            .Select(item => item.Path)
-            .FirstOrDefault(path => !string.IsNullOrEmpty(path));
-
-            if (string.IsNullOrEmpty(firstTrackPath))
-            {
-                return Ok(Array.Empty<GeneratedPlaylist>());
-            }
-
-            var musicRoot = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(firstTrackPath)));
-            if (string.IsNullOrEmpty(musicRoot))
-            {
-                return Ok(Array.Empty<GeneratedPlaylist>());
-            }
-
-            var playlistDirectory = Path.Combine(musicRoot, "playlists");
-            if (!Directory.Exists(playlistDirectory))
+            var playlistDirectory = PlaylistLocator.GetPlaylistDirectory(_libraryManager);
+            if (string.IsNullOrEmpty(playlistDirectory) || !Directory.Exists(playlistDirectory))
             {
                 return Ok(Array.Empty<GeneratedPlaylist>());
             }
@@ -82,11 +77,55 @@ namespace JellyfinPlaylist
             return Ok(new { message = "Export task completed." });
         }
 
-        // Placeholder for future import logic
+        /// <summary>
+        /// Replays the Favorites.json sitting in the playlists folder, favoriting the same items
+        /// on this server. Favorites are per-user in Jellyfin but the export merges every user's,
+        /// so the import targets a single user: the caller, unless <paramref name="userId"/> says
+        /// otherwise. It only ever adds favorites -- nothing is un-favorited.
+        /// </summary>
         [HttpPost("Import")]
-        public ActionResult ImportNow()
+        public async Task<ActionResult<ImportResultJson>> ImportNow([FromQuery] Guid? userId, CancellationToken cancellationToken)
         {
-            return Ok(new { message = "Import functionality coming soon!" });
+            var authorizationInfo = await _authorizationContext.GetAuthorizationInfo(Request).ConfigureAwait(false);
+            var targetUserId = userId ?? authorizationInfo.UserId;
+
+            var user = targetUserId.Equals(default) ? null : _userManager.GetUserById(targetUserId);
+            if (user is null)
+            {
+                return NotFound(new { message = "Could not determine which user to import favorites for." });
+            }
+
+            var manifestPath = PlaylistLocator.GetManifestPath(_libraryManager);
+            if (string.IsNullOrEmpty(manifestPath))
+            {
+                return NotFound(new { message = "No music library was found to import into." });
+            }
+
+            if (!System.IO.File.Exists(manifestPath))
+            {
+                return NotFound(new { message = "No " + PlaylistLocator.ManifestFileName + " found at " + manifestPath + "." });
+            }
+
+            FavoritesJson? manifest;
+            try
+            {
+                await using var stream = System.IO.File.OpenRead(manifestPath);
+                manifest = await JsonSerializer.DeserializeAsync<FavoritesJson>(stream, ManifestOptions, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (JsonException exception)
+            {
+                return BadRequest(new { message = manifestPath + " could not be read: " + exception.Message });
+            }
+
+            if (manifest is null)
+            {
+                return BadRequest(new { message = manifestPath + " is empty." });
+            }
+
+            var importer = new FavoritesImporter(_libraryManager, _userDataManager);
+
+            return Ok(importer.Import(user, manifest, cancellationToken));
         }
     }
 

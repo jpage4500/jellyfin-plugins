@@ -1,0 +1,20 @@
+[
+    {
+        "guid": "f9b7b8d4-8d9e-4b3a-9a2f-3d5c6e8a1b2c",
+        "name": "Favorites Exporter",
+        "description": "Exports favorited music to portable .m3u playlists, and replays those favorites onto another server.",
+        "overview": "Back up and move your music favorites",
+        "owner": "jpage4500",
+        "category": "General",
+        "versions": [
+            {
+                "version": "1.0.0.0",
+                "changelog": "Initial release: scheduled M3U export, favorites tree in the dashboard, and JSON import onto another server.",
+                "targetAbi": "13.0.0.0",
+                "sourceUrl": "https://github.com/jpage4500/jellyfin-plugins/releases/download/v1.0.0.0/favorites-exporter_1.0.0.0.zip",
+                "checksum": "802d039ee2c6703abdbe141170f770c9",
+                "timestamp": "2026-09-23T15:15:31Z"
+            }
+        ]
+    }
+]

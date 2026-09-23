@@ -482,3 +482,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Release artifacts built by package.sh (published as GitHub release assets, not committed)
+dist/

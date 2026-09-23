@@ -82,27 +82,12 @@ namespace JellyfinPlaylist
                     .Where(track => track.Artists.Any(artist => pair.Value.Name.Equals(artist, StringComparison.OrdinalIgnoreCase)))
                     .ToList());
 
-            var exportTracks = favoriteTracks.Values
-                .Concat(albumTracks.Values.SelectMany(tracks => tracks))
-                .Concat(artistTracks.Values.SelectMany(tracks => tracks))
-                .Where(track => !string.IsNullOrEmpty(track.Path))
-                .GroupBy(track => track.Path, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())
-                .ToList();
-
-            var firstTrackPath = exportTracks.Select(track => track.Path).FirstOrDefault(path => !string.IsNullOrEmpty(path));
-            if (string.IsNullOrEmpty(firstTrackPath))
+            var playlistDirectory = PlaylistLocator.GetPlaylistDirectory(_libraryManager);
+            if (string.IsNullOrEmpty(playlistDirectory))
             {
                 return Task.CompletedTask;
             }
 
-            var musicRoot = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(firstTrackPath)));
-            if (string.IsNullOrEmpty(musicRoot))
-            {
-                return Task.CompletedTask;
-            }
-
-            var playlistDirectory = Path.Combine(musicRoot, "playlists");
             Directory.CreateDirectory(playlistDirectory);
 
             WritePlaylist(Path.Combine(playlistDirectory, "Favorites.m3u"), playlistDirectory, favoriteTracks.Values);
@@ -140,7 +125,7 @@ namespace JellyfinPlaylist
             };
 
             File.WriteAllText(
-                Path.Combine(playlistDirectory, "Favorites.json"),
+                Path.Combine(playlistDirectory, PlaylistLocator.ManifestFileName),
                 JsonSerializer.Serialize(export, new JsonSerializerOptions { WriteIndented = true }));
 
             return Task.CompletedTask;
@@ -204,14 +189,19 @@ namespace JellyfinPlaylist
         public List<FavoriteArtistJson> Artists { get; set; } = new();
     }
 
-    internal sealed class FavoriteTrackJson
+    internal interface INamedExport
+    {
+        string Name { get; }
+    }
+
+    internal sealed class FavoriteTrackJson : INamedExport
     {
         public string Name { get; set; } = string.Empty;
         public string Path { get; set; } = string.Empty;
         public Dictionary<string, string> ProviderIds { get; set; } = new();
     }
 
-    internal sealed class FavoriteAlbumJson
+    internal sealed class FavoriteAlbumJson : INamedExport
     {
         public string Name { get; set; } = string.Empty;
         public List<string> Artists { get; set; } = new();
@@ -219,7 +209,7 @@ namespace JellyfinPlaylist
         public List<FavoriteTrackJson> Tracks { get; set; } = new();
     }
 
-    internal sealed class FavoriteArtistJson
+    internal sealed class FavoriteArtistJson : INamedExport
     {
         public string Name { get; set; } = string.Empty;
         public Dictionary<string, string> ProviderIds { get; set; } = new();

@@ -6,9 +6,137 @@
 </head>
 <body>
     <div id="FavoritesExporterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-button">
+        <style>
+            #FavoritesExporterConfigPage .favExpTree {
+                margin: 0;
+                padding: 0;
+                max-width: 46em;
+                list-style: none;
+            }
+
+            #FavoritesExporterConfigPage .favExpNode > summary {
+                display: flex;
+                align-items: center;
+                gap: .5em;
+                padding: .3em .4em;
+                border-radius: .2em;
+                cursor: pointer;
+                list-style: none;
+            }
+
+            #FavoritesExporterConfigPage .favExpNode > summary::-webkit-details-marker {
+                display: none;
+            }
+
+            #FavoritesExporterConfigPage .favExpNode > summary:hover {
+                background: rgba(127, 127, 127, .14);
+            }
+
+            /* Disclosure triangle, drawn rather than inherited so it looks the same in every theme. */
+            #FavoritesExporterConfigPage .favExpNode > summary::before {
+                content: '';
+                flex: none;
+                width: 0;
+                height: 0;
+                border-left: .4em solid currentColor;
+                border-top: .3em solid transparent;
+                border-bottom: .3em solid transparent;
+                opacity: .55;
+                transition: transform .12s ease;
+            }
+
+            #FavoritesExporterConfigPage .favExpNode[open] > summary::before {
+                transform: rotate(90deg);
+            }
+
+            #FavoritesExporterConfigPage .favExpLabel {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            #FavoritesExporterConfigPage .favExpPlaylist > summary .favExpLabel {
+                font-weight: 500;
+            }
+
+            #FavoritesExporterConfigPage .favExpFolder > summary .favExpLabel {
+                font-size: .92em;
+                opacity: .85;
+            }
+
+            #FavoritesExporterConfigPage .favExpCount {
+                margin-left: auto;
+                padding-left: .75em;
+                flex: none;
+                font-size: .8em;
+                opacity: .55;
+            }
+
+            /* Indent guide down the left of each nested level. */
+            #FavoritesExporterConfigPage .favExpNode > .favExpTrackList,
+            #FavoritesExporterConfigPage .favExpPlaylist > .favExpFolder {
+                margin: 0 0 0 .8em;
+                padding-left: .8em;
+                border-left: 1px solid rgba(127, 127, 127, .35);
+            }
+
+            #FavoritesExporterConfigPage .favExpTrackList {
+                list-style: none;
+            }
+
+            #FavoritesExporterConfigPage .favExpTrack {
+                padding: .12em .4em;
+                font-size: .92em;
+                line-height: 1.4;
+                opacity: .8;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            #FavoritesExporterConfigPage .favExpResult {
+                max-width: 46em;
+                margin-top: 1.2em;
+                padding: .8em 1em;
+                border-radius: .25em;
+                background: rgba(127, 127, 127, .14);
+                font-size: .92em;
+            }
+
+            #FavoritesExporterConfigPage .favExpResult h3 {
+                margin: 0 0 .5em;
+                font-size: 1em;
+                font-weight: 500;
+            }
+
+            #FavoritesExporterConfigPage .favExpResultRow {
+                display: flex;
+                gap: .75em;
+                padding: .15em 0;
+            }
+
+            #FavoritesExporterConfigPage .favExpResultRow > span:first-child {
+                flex: none;
+                width: 5em;
+                opacity: .6;
+            }
+
+            #FavoritesExporterConfigPage .favExpResultNote {
+                margin: .6em 0 0;
+                font-size: .9em;
+                opacity: .6;
+            }
+
+            #FavoritesExporterConfigPage .favExpEmpty {
+                margin: .2em 0 .2em 1.6em;
+                font-size: .9em;
+                opacity: .6;
+            }
+        </style>
+
         <div data-role="content">
             <div class="content-primary">
-                
+
                 <h1>Favorites Exporter</h1>
                 <p>Manage and backup your favorited music to portable .m3u playlists.</p>
 
@@ -17,12 +145,14 @@
                         <span>Export Favorites Now</span>
                     </button>
                     <button is="emby-button" type="button" class="raised block emby-button" id="btnImport">
-                        <span>Import from M3U (Coming Soon)</span>
+                        <span>Import Favorites from JSON</span>
                     </button>
                 </div>
 
-                <h2 style="margin-top: 3em;">Generated Playlists Found</h2>
-                <div id="playlistContainer" class="paperList">
+                <div id="importResult" class="favExpResult" hidden></div>
+
+                <h2 style="margin-top: 2em;">Generated Playlists Found</h2>
+                <div id="playlistContainer" class="favExpTree">
                     <p>Loading...</p>
                 </div>
 
@@ -30,6 +160,10 @@
         </div>
 
         <script type="text/javascript">
+            // NOTE: do not use JS template literals here. Jellyfin runs plugin configuration
+            // pages through its localization pass, which rewrites every dollar-brace token in
+            // the file -- inline scripts included -- before the script is evaluated, so any
+            // interpolation is replaced by the bare text of its expression.
             var FavoritesExporterConfig = {
                 pluginUniqueId: "f9b7b8d4-8d9e-4b3a-9a2f-3d5c6e8a1b2c",
 
@@ -44,40 +178,137 @@
                         }[character];
                     });
                 },
-                
-                loadPlaylists: function() {
-                    ApiClient.getJSON(ApiClient.getUrl("Plugin/FavoritesExporter/Playlists")).then(function (playlists) {
-                        var html = "";
-                        if (playlists.length === 0) {
-                            html = "<p>No exported favorites found yet.</p>";
+
+                // The API returns camelCase, but tolerate PascalCase in case serialization changes.
+                pick: function (object, name) {
+                    var lower = name.charAt(0).toLowerCase() + name.slice(1);
+                    var upper = name.charAt(0).toUpperCase() + name.slice(1);
+                    var value = object[lower];
+                    return value === undefined || value === null ? object[upper] : value;
+                },
+
+                // "../Trent Reznor/The Social Network/03 - A Familiar Taste.mp3"
+                //   -> "Trent Reznor/The Social Network"
+                folderOf: function (path) {
+                    var normalized = String(path).replace(/\\/g, '/');
+                    var index = normalized.lastIndexOf('/');
+                    return index < 0 ? '' : normalized.slice(0, index).replace(/^(\.\.\/)+/, '');
+                },
+
+                groupByFolder: function (songs) {
+                    var order = [];
+                    var groups = Object.create(null);
+                    songs.forEach(function (song) {
+                        var folder = FavoritesExporterConfig.folderOf(FavoritesExporterConfig.pick(song, 'path') || '');
+                        if (!groups[folder]) {
+                            groups[folder] = [];
+                            order.push(folder);
+                        }
+                        groups[folder].push(song);
+                    });
+                    return order.map(function (folder) {
+                        return { folder: folder, songs: groups[folder] };
+                    });
+                },
+
+                countLabel: function (count) {
+                    return count + (count === 1 ? ' song' : ' songs');
+                },
+
+                trackList: function (songs) {
+                    var esc = FavoritesExporterConfig.escapeHtml;
+                    return '<ul class="favExpTrackList">' + songs.map(function (song) {
+                        var name = FavoritesExporterConfig.pick(song, 'name') || '';
+                        var path = FavoritesExporterConfig.pick(song, 'path') || '';
+                        return '<li class="favExpTrack" title="' + esc(path) + '">' + esc(name) + '</li>';
+                    }).join('') + '</ul>';
+                },
+
+                playlistNode: function (playlist) {
+                    var esc = FavoritesExporterConfig.escapeHtml;
+                    var name = FavoritesExporterConfig.pick(playlist, 'name') || '';
+                    var songs = FavoritesExporterConfig.pick(playlist, 'songs') || [];
+                    var body;
+
+                    if (songs.length === 0) {
+                        body = '<p class="favExpEmpty">No songs in this playlist.</p>';
+                    } else {
+                        var groups = FavoritesExporterConfig.groupByFolder(songs);
+                        if (groups.length === 1) {
+                            // A single-album playlist gains nothing from a folder level.
+                            body = FavoritesExporterConfig.trackList(songs);
                         } else {
-                            html = playlists.map(function (playlist, index) {
-                                var playlistName = playlist.name || playlist.Name || '';
-                                var playlistSongs = playlist.songs || playlist.Songs || [];
-                                var songs = playlistSongs.map(function (song) {
-                                    var songName = song.name || song.Name || '';
-                                    var songPath = song.path || song.Path || '';
-                                    return `<div class="listItem"><div class="listItemBody"><div class="listItemBodyText">${FavoritesExporterConfig.escapeHtml(songName)}</div><div class="secondary listItemBodyText">${FavoritesExporterConfig.escapeHtml(songPath)}</div></div></div>`;
-                                }).join('');
-                                var songList = songs || '<p>No songs in this playlist.</p>';
-                                return `<div class="listItem">
-                                    <button type="button" class="listItemBody" data-playlist-index="${index}" aria-expanded="false">
-                                        <h3 class="listItemBodyText">${FavoritesExporterConfig.escapeHtml(playlistName)}</h3>
-                                    </button>
-                                    <div id="playlistSongs-${index}" style="display: none; padding-left: 1em;">${songList}</div>
-                                </div>`;
+                            body = groups.map(function (group) {
+                                return '<details class="favExpNode favExpFolder">' +
+                                    '<summary>' +
+                                    '<span class="favExpLabel" title="' + esc(group.folder) + '">' + esc(group.folder) + '</span>' +
+                                    '<span class="favExpCount">' + group.songs.length + '</span>' +
+                                    '</summary>' +
+                                    FavoritesExporterConfig.trackList(group.songs) +
+                                    '</details>';
                             }).join('');
                         }
-                        var container = document.querySelector('#playlistContainer');
-                        container.innerHTML = html;
-                        container.querySelectorAll('[data-playlist-index]').forEach(function (button) {
-                            button.addEventListener('click', function () {
-                                var songs = document.querySelector('#playlistSongs-' + button.dataset.playlistIndex);
-                                var expanded = button.getAttribute('aria-expanded') === 'true';
-                                button.setAttribute('aria-expanded', String(!expanded));
-                                songs.style.display = expanded ? 'none' : 'block';
-                            });
-                        });
+                    }
+
+                    return '<details class="favExpNode favExpPlaylist">' +
+                        '<summary>' +
+                        '<span class="favExpLabel" title="' + esc(name) + '">' + esc(name) + '</span>' +
+                        '<span class="favExpCount">' + FavoritesExporterConfig.countLabel(songs.length) + '</span>' +
+                        '</summary>' +
+                        body +
+                        '</details>';
+                },
+
+                showImportMessage: function (html) {
+                    var container = document.querySelector('#importResult');
+                    container.innerHTML = html;
+                    container.hidden = false;
+                },
+
+                importSummaryRow: function (label, category) {
+                    var esc = FavoritesExporterConfig.escapeHtml;
+                    var pick = FavoritesExporterConfig.pick;
+                    var parts = [
+                        pick(category, 'favorited') + ' newly favorited',
+                        pick(category, 'alreadyFavorite') + ' already',
+                        pick(category, 'notFound') + ' not found'
+                    ];
+                    return '<div class="favExpResultRow"><span>' + esc(label) + '</span>' +
+                        '<span>' + esc(parts.join('  \u00b7  ')) + '</span></div>';
+                },
+
+                renderImportResult: function (result) {
+                    var esc = FavoritesExporterConfig.escapeHtml;
+                    var pick = FavoritesExporterConfig.pick;
+                    var categories = [
+                        ['Tracks', pick(result, 'tracks')],
+                        ['Albums', pick(result, 'albums')],
+                        ['Artists', pick(result, 'artists')]
+                    ];
+
+                    var html = '<h3>Imported favorites for ' + esc(pick(result, 'user')) + '</h3>' +
+                        categories.map(function (entry) {
+                            return FavoritesExporterConfig.importSummaryRow(entry[0], entry[1]);
+                        }).join('');
+
+                    // Anything the manifest listed that this library has no counterpart for --
+                    // usually a track the server has not scanned, or a different tagging of it.
+                    var missing = categories.reduce(function (all, entry) {
+                        return all.concat(pick(entry[1], 'missing') || []);
+                    }, []);
+                    if (missing.length > 0) {
+                        html += '<p class="favExpResultNote">Not matched in this library: ' +
+                            esc(missing.join(', ')) + '</p>';
+                    }
+
+                    FavoritesExporterConfig.showImportMessage(html);
+                },
+
+                loadPlaylists: function () {
+                    ApiClient.getJSON(ApiClient.getUrl("Plugin/FavoritesExporter/Playlists")).then(function (playlists) {
+                        document.querySelector('#playlistContainer').innerHTML = playlists.length === 0
+                            ? '<p>No exported favorites found yet.</p>'
+                            : playlists.map(FavoritesExporterConfig.playlistNode).join('');
                     }).catch(function () {
                         document.querySelector('#playlistContainer').innerHTML = '<p>Unable to load generated playlists.</p>';
                     });
@@ -101,11 +332,36 @@
 
                 // Wire up the Import button
                 document.querySelector('#btnImport').addEventListener('click', function () {
+                    if (!confirm('Favorite every track, album and artist listed in Favorites.json for your account?')) {
+                        return;
+                    }
+
+                    var button = this;
+                    button.disabled = true;
+                    FavoritesExporterConfig.showImportMessage('<p>Importing...</p>');
+
                     ApiClient.ajax({
                         type: "POST",
-                        url: ApiClient.getUrl("Plugin/FavoritesExporter/Import")
-                    }).then(function (response) {
-                        Dashboard.alert(response.message);
+                        url: ApiClient.getUrl("Plugin/FavoritesExporter/Import"),
+                        dataType: "json"
+                    }).then(function (result) {
+                        button.disabled = false;
+                        FavoritesExporterConfig.renderImportResult(result);
+                    }, function (error) {
+                        button.disabled = false;
+                        // Jellyfin rejects with the failed Response, which carries the reason.
+                        if (error && typeof error.json === 'function') {
+                            error.json().then(function (body) {
+                                FavoritesExporterConfig.showImportMessage('<p>' +
+                                    FavoritesExporterConfig.escapeHtml(
+                                        FavoritesExporterConfig.pick(body || {}, 'message') || 'Import failed.') +
+                                    '</p>');
+                            }, function () {
+                                FavoritesExporterConfig.showImportMessage('<p>Import failed.</p>');
+                            });
+                            return;
+                        }
+                        FavoritesExporterConfig.showImportMessage('<p>Import failed.</p>');
                     });
                 });
             });
