@@ -1,3 +1,4 @@
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.AspNetCore.Mvc;
@@ -26,17 +27,48 @@ namespace JellyfinPlaylist
 
         // Endpoint to list the generated playlists
         [HttpGet("Playlists")]
-        public ActionResult<IEnumerable<string>> GetPlaylists()
+        public ActionResult<IEnumerable<GeneratedPlaylist>> GetPlaylists()
         {
-            var query = new InternalItemsQuery
+            var firstTrackPath = _libraryManager.GetItemList(new InternalItemsQuery
             {
-                IncludeItemTypes = new[] { BaseItemKind.Playlist },
-                SearchTerm = "_Favorites" // Finds playlists ending in _Favorites
-            };
+                IncludeItemTypes = new[] { BaseItemKind.Audio },
+                IsFolder = false
+            })
+            .Select(item => item.Path)
+            .FirstOrDefault(path => !string.IsNullOrEmpty(path));
 
-            var playlists = _libraryManager.GetItemList(query)
-                                           .Select(p => p.Name)
-                                           .ToList();
+            if (string.IsNullOrEmpty(firstTrackPath))
+            {
+                return Ok(Array.Empty<GeneratedPlaylist>());
+            }
+
+            var musicRoot = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(firstTrackPath)));
+            if (string.IsNullOrEmpty(musicRoot))
+            {
+                return Ok(Array.Empty<GeneratedPlaylist>());
+            }
+
+            var playlistDirectory = Path.Combine(musicRoot, "playlists");
+            if (!Directory.Exists(playlistDirectory))
+            {
+                return Ok(Array.Empty<GeneratedPlaylist>());
+            }
+
+            var playlists = Directory.EnumerateFiles(playlistDirectory, "*.m3u", SearchOption.TopDirectoryOnly)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .Select(path => new GeneratedPlaylist
+                {
+                    Name = Path.GetFileNameWithoutExtension(path),
+                    Songs = System.IO.File.ReadLines(path)
+                        .Where(line => !string.IsNullOrWhiteSpace(line) && !line.StartsWith("#"))
+                        .Select(line => new GeneratedSong
+                        {
+                            Name = Path.GetFileNameWithoutExtension(line),
+                            Path = line
+                        })
+                        .ToList()
+                })
+                .ToList();
 
             return Ok(playlists);
         }
@@ -56,5 +88,17 @@ namespace JellyfinPlaylist
         {
             return Ok(new { message = "Import functionality coming soon!" });
         }
+    }
+
+    public sealed class GeneratedPlaylist
+    {
+        public string Name { get; set; } = string.Empty;
+        public List<GeneratedSong> Songs { get; set; } = new();
+    }
+
+    public sealed class GeneratedSong
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
     }
 }

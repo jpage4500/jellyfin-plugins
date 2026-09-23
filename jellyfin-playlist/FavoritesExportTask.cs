@@ -1,13 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.Library;
-using MediaBrowser.Controller.Entities; 
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Tasks;
-using Jellyfin.Data.Enums; // <-- Added this namespace for BaseItemKind
+using Jellyfin.Data.Enums;
 
 namespace JellyfinPlaylist
 {
@@ -29,45 +31,156 @@ namespace JellyfinPlaylist
 
         public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         {
-            var users = _userManager.GetUsers().ToList();
-            
-            foreach (var user in users)
+            var favoriteTracks = new Dictionary<string, Audio>(StringComparer.OrdinalIgnoreCase);
+            var favoriteAlbums = new Dictionary<Guid, MusicAlbum>();
+            var favoriteArtists = new Dictionary<Guid, MusicArtist>();
+            var allTracks = new Dictionary<string, Audio>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var user in _userManager.GetUsers())
             {
-                var query = new InternalItemsQuery(user)
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var favoriteItems = _libraryManager.GetItemList(new InternalItemsQuery(user)
                 {
-                    // 1. Jellyfin 12 uses the BaseItemKind enum instead of strings
-                    IncludeItemTypes = new[] { BaseItemKind.Audio },
-                    IsFavorite = true,
-                    IsFolder = false
-                };
+                    IncludeItemTypes = new[] { BaseItemKind.Audio, BaseItemKind.MusicAlbum, BaseItemKind.MusicArtist },
+                    IsFavorite = true
+                });
 
-                var favoriteTracks = _libraryManager.GetItemList(query);
-
-                if (favoriteTracks.Count == 0) continue;
-
-                var firstTrackPath = favoriteTracks.First().Path;
-                if (string.IsNullOrEmpty(firstTrackPath)) continue;
-
-                var musicDirectory = Path.GetDirectoryName(Path.GetDirectoryName(firstTrackPath)); 
-                if (string.IsNullOrEmpty(musicDirectory)) continue;
-
-                // 2. Jellyfin 12 renamed .Name to .Username
-                var m3uPath = Path.Combine(musicDirectory, $"{user.Username}_Favorites.m3u");
-
-                using (var writer = new StreamWriter(m3uPath, false))
+                foreach (var item in favoriteItems)
                 {
-                    writer.WriteLine("#EXTM3U");
-                    foreach (var track in favoriteTracks)
+                    if (item is Audio audio && !string.IsNullOrEmpty(audio.Path))
                     {
-                        if (!string.IsNullOrEmpty(track.Path))
-                        {
-                            writer.WriteLine(track.Path);
-                        }
+                        favoriteTracks.TryAdd(audio.Path, audio);
+                    }
+                    else if (item is MusicAlbum album)
+                    {
+                        favoriteAlbums.TryAdd(album.Id, album);
+                    }
+                    else if (item is MusicArtist artist)
+                    {
+                        favoriteArtists.TryAdd(artist.Id, artist);
+                    }
+                }
+
+                foreach (var item in _libraryManager.GetItemList(new InternalItemsQuery(user)
+                {
+                    IncludeItemTypes = new[] { BaseItemKind.Audio },
+                    IsFolder = false
+                }).OfType<Audio>())
+                {
+                    if (!string.IsNullOrEmpty(item.Path))
+                    {
+                        allTracks.TryAdd(item.Path, item);
                     }
                 }
             }
 
+            var albumTracks = favoriteAlbums.ToDictionary(pair => pair.Key, pair => GetAlbumTracks(pair.Value));
+            var artistTracks = favoriteArtists.ToDictionary(
+                pair => pair.Key,
+                pair => allTracks.Values
+                    .Where(track => track.Artists.Any(artist => pair.Value.Name.Equals(artist, StringComparison.OrdinalIgnoreCase)))
+                    .ToList());
+
+            var exportTracks = favoriteTracks.Values
+                .Concat(albumTracks.Values.SelectMany(tracks => tracks))
+                .Concat(artistTracks.Values.SelectMany(tracks => tracks))
+                .Where(track => !string.IsNullOrEmpty(track.Path))
+                .GroupBy(track => track.Path, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
+
+            var firstTrackPath = exportTracks.Select(track => track.Path).FirstOrDefault(path => !string.IsNullOrEmpty(path));
+            if (string.IsNullOrEmpty(firstTrackPath))
+            {
+                return Task.CompletedTask;
+            }
+
+            var musicRoot = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetDirectoryName(firstTrackPath)));
+            if (string.IsNullOrEmpty(musicRoot))
+            {
+                return Task.CompletedTask;
+            }
+
+            var playlistDirectory = Path.Combine(musicRoot, "playlists");
+            Directory.CreateDirectory(playlistDirectory);
+
+            WritePlaylist(Path.Combine(playlistDirectory, "Favorites.m3u"), playlistDirectory, favoriteTracks.Values);
+
+            foreach (var album in favoriteAlbums.Values)
+            {
+                var artistName = album.AlbumArtists.FirstOrDefault() ?? "Unknown Artist";
+                var filename = SanitizeFilename($"{artistName} - {album.Name}.m3u");
+                WritePlaylist(Path.Combine(playlistDirectory, filename), playlistDirectory, albumTracks[album.Id]);
+            }
+
+            foreach (var artist in favoriteArtists.Values)
+            {
+                var filename = SanitizeFilename($"{artist.Name}.m3u");
+                WritePlaylist(Path.Combine(playlistDirectory, filename), playlistDirectory, artistTracks[artist.Id]);
+            }
+
+            var export = new FavoritesJson
+            {
+                GeneratedAtUtc = DateTime.UtcNow,
+                Tracks = favoriteTracks.Values.Select(track => ToTrackExport(track, playlistDirectory)).ToList(),
+                Albums = favoriteAlbums.Values.Select(album => new FavoriteAlbumJson
+                {
+                    Name = album.Name,
+                    Artists = album.AlbumArtists.ToList(),
+                    ProviderIds = album.ProviderIds.ToDictionary(pair => pair.Key, pair => pair.Value),
+                    Tracks = albumTracks[album.Id].Select(track => ToTrackExport(track, playlistDirectory)).ToList()
+                }).ToList(),
+                Artists = favoriteArtists.Values.Select(artist => new FavoriteArtistJson
+                {
+                    Name = artist.Name,
+                    ProviderIds = artist.ProviderIds.ToDictionary(pair => pair.Key, pair => pair.Value),
+                    Tracks = artistTracks[artist.Id].Select(track => ToTrackExport(track, playlistDirectory)).ToList()
+                }).ToList()
+            };
+
+            File.WriteAllText(
+                Path.Combine(playlistDirectory, "Favorites.json"),
+                JsonSerializer.Serialize(export, new JsonSerializerOptions { WriteIndented = true }));
+
             return Task.CompletedTask;
+        }
+
+        private List<Audio> GetAlbumTracks(MusicAlbum album)
+        {
+            return _libraryManager.GetItemList(new InternalItemsQuery
+            {
+                ParentId = album.Id,
+                IncludeItemTypes = new[] { BaseItemKind.Audio },
+                IsFolder = false
+            }).OfType<Audio>().Where(track => !string.IsNullOrEmpty(track.Path)).ToList();
+        }
+
+        private static void WritePlaylist(string path, string playlistDirectory, IEnumerable<Audio> tracks)
+        {
+            using var writer = new StreamWriter(path, false);
+            writer.WriteLine("#EXTM3U");
+            foreach (var track in tracks.Where(track => !string.IsNullOrEmpty(track.Path)).GroupBy(track => track.Path, StringComparer.OrdinalIgnoreCase).Select(group => group.First()))
+            {
+                var relativePath = Path.GetRelativePath(playlistDirectory, track.Path).Replace(Path.DirectorySeparatorChar, '/');
+                writer.WriteLine(relativePath);
+            }
+        }
+
+        private static FavoriteTrackJson ToTrackExport(Audio track, string playlistDirectory)
+        {
+            return new FavoriteTrackJson
+            {
+                Name = track.Name,
+                Path = Path.GetRelativePath(playlistDirectory, track.Path).Replace(Path.DirectorySeparatorChar, '/'),
+                ProviderIds = track.ProviderIds.ToDictionary(pair => pair.Key, pair => pair.Value)
+            };
+        }
+
+        private static string SanitizeFilename(string filename)
+        {
+            var invalidCharacters = Path.GetInvalidFileNameChars().Concat(new[] { ':', '*', '?', '"', '<', '>', '|', '/' }).ToHashSet();
+            return string.Concat(filename.Select(character => invalidCharacters.Contains(character) ? '_' : character));
         }
 
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
@@ -81,5 +194,35 @@ namespace JellyfinPlaylist
                 }
             };
         }
+    }
+
+    internal sealed class FavoritesJson
+    {
+        public DateTime GeneratedAtUtc { get; set; }
+        public List<FavoriteTrackJson> Tracks { get; set; } = new();
+        public List<FavoriteAlbumJson> Albums { get; set; } = new();
+        public List<FavoriteArtistJson> Artists { get; set; } = new();
+    }
+
+    internal sealed class FavoriteTrackJson
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Path { get; set; } = string.Empty;
+        public Dictionary<string, string> ProviderIds { get; set; } = new();
+    }
+
+    internal sealed class FavoriteAlbumJson
+    {
+        public string Name { get; set; } = string.Empty;
+        public List<string> Artists { get; set; } = new();
+        public Dictionary<string, string> ProviderIds { get; set; } = new();
+        public List<FavoriteTrackJson> Tracks { get; set; } = new();
+    }
+
+    internal sealed class FavoriteArtistJson
+    {
+        public string Name { get; set; } = string.Empty;
+        public Dictionary<string, string> ProviderIds { get; set; } = new();
+        public List<FavoriteTrackJson> Tracks { get; set; } = new();
     }
 }

@@ -32,6 +32,18 @@
         <script type="text/javascript">
             var FavoritesExporterConfig = {
                 pluginUniqueId: "f9b7b8d4-8d9e-4b3a-9a2f-3d5c6e8a1b2c",
+
+                escapeHtml: function (value) {
+                    return String(value).replace(/[&<>'"]/g, function (character) {
+                        return {
+                            '&': '&amp;',
+                            '<': '&lt;',
+                            '>': '&gt;',
+                            "'": '&#39;',
+                            '"': '&quot;'
+                        }[character];
+                    });
+                },
                 
                 loadPlaylists: function() {
                     ApiClient.getJSON(ApiClient.getUrl("Plugin/FavoritesExporter/Playlists")).then(function (playlists) {
@@ -39,9 +51,35 @@
                         if (playlists.length === 0) {
                             html = "<p>No exported favorites found yet.</p>";
                         } else {
-                            html = playlists.map(p => `<div class="listItem"><div class="listItemBody"><h3 class="listItemBodyText">${p}</h3></div></div>`).join('');
+                            html = playlists.map(function (playlist, index) {
+                                var playlistName = playlist.name || playlist.Name || '';
+                                var playlistSongs = playlist.songs || playlist.Songs || [];
+                                var songs = playlistSongs.map(function (song) {
+                                    var songName = song.name || song.Name || '';
+                                    var songPath = song.path || song.Path || '';
+                                    return `<div class="listItem"><div class="listItemBody"><div class="listItemBodyText">${FavoritesExporterConfig.escapeHtml(songName)}</div><div class="secondary listItemBodyText">${FavoritesExporterConfig.escapeHtml(songPath)}</div></div></div>`;
+                                }).join('');
+                                var songList = songs || '<p>No songs in this playlist.</p>';
+                                return `<div class="listItem">
+                                    <button type="button" class="listItemBody" data-playlist-index="${index}" aria-expanded="false">
+                                        <h3 class="listItemBodyText">${FavoritesExporterConfig.escapeHtml(playlistName)}</h3>
+                                    </button>
+                                    <div id="playlistSongs-${index}" style="display: none; padding-left: 1em;">${songList}</div>
+                                </div>`;
+                            }).join('');
                         }
-                        document.querySelector('#playlistContainer').innerHTML = html;
+                        var container = document.querySelector('#playlistContainer');
+                        container.innerHTML = html;
+                        container.querySelectorAll('[data-playlist-index]').forEach(function (button) {
+                            button.addEventListener('click', function () {
+                                var songs = document.querySelector('#playlistSongs-' + button.dataset.playlistIndex);
+                                var expanded = button.getAttribute('aria-expanded') === 'true';
+                                button.setAttribute('aria-expanded', String(!expanded));
+                                songs.style.display = expanded ? 'none' : 'block';
+                            });
+                        });
+                    }).catch(function () {
+                        document.querySelector('#playlistContainer').innerHTML = '<p>Unable to load generated playlists.</p>';
                     });
                 }
             };
@@ -56,8 +94,8 @@
                         type: "POST",
                         url: ApiClient.getUrl("Plugin/FavoritesExporter/Export")
                     }).then(function () {
-                        Dashboard.alert("Export task has been triggered in the background.");
-                        setTimeout(FavoritesExporterConfig.loadPlaylists, 3000); // refresh list
+                        Dashboard.alert("Export completed.");
+                        FavoritesExporterConfig.loadPlaylists();
                     });
                 });
 
