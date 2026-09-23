@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Favorites Exporter</title>
+</head>
+<body>
+    <div id="FavoritesExporterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-button">
+        <div data-role="content">
+            <div class="content-primary">
+                
+                <h1>Favorites Exporter</h1>
+                <p>Manage and backup your favorited music to portable .m3u playlists.</p>
+
+                <div style="margin-top: 2em; display: flex; gap: 1em;">
+                    <button is="emby-button" type="button" class="raised button-submit block emby-button" id="btnExport">
+                        <span>Export Favorites Now</span>
+                    </button>
+                    <button is="emby-button" type="button" class="raised block emby-button" id="btnImport">
+                        <span>Import from M3U (Coming Soon)</span>
+                    </button>
+                </div>
+
+                <h2 style="margin-top: 3em;">Generated Playlists Found</h2>
+                <div id="playlistContainer" class="paperList">
+                    <p>Loading...</p>
+                </div>
+
+            </div>
+        </div>
+
+        <script type="text/javascript">
+            var FavoritesExporterConfig = {
+                pluginUniqueId: "f9b7b8d4-8d9e-4b3a-9a2f-3d5c6e8a1b2c",
+                
+                loadPlaylists: function() {
+                    ApiClient.getJSON(ApiClient.getUrl("Plugin/FavoritesExporter/Playlists")).then(function (playlists) {
+                        var html = "";
+                        if (playlists.length === 0) {
+                            html = "<p>No exported favorites found yet.</p>";
+                        } else {
+                            html = playlists.map(p => `<div class="listItem"><div class="listItemBody"><h3 class="listItemBodyText">${p}</h3></div></div>`).join('');
+                        }
+                        document.querySelector('#playlistContainer').innerHTML = html;
+                    });
+                }
+            };
+
+            // Event listener for when the Jellyfin UI loads this page
+            document.querySelector('#FavoritesExporterConfigPage').addEventListener('pageshow', function () {
+                FavoritesExporterConfig.loadPlaylists();
+
+                // Wire up the Export button
+                document.querySelector('#btnExport').addEventListener('click', function () {
+                    ApiClient.ajax({
+                        type: "POST",
+                        url: ApiClient.getUrl("Plugin/FavoritesExporter/Export")
+                    }).then(function () {
+                        Dashboard.alert("Export task has been triggered in the background.");
+                        setTimeout(FavoritesExporterConfig.loadPlaylists, 3000); // refresh list
+                    });
+                });
+
+                // Wire up the Import button
+                document.querySelector('#btnImport').addEventListener('click', function () {
+                    ApiClient.ajax({
+                        type: "POST",
+                        url: ApiClient.getUrl("Plugin/FavoritesExporter/Import")
+                    }).then(function (response) {
+                        Dashboard.alert(response.message);
+                    });
+                });
+            });
+        </script>
+    </div>
+</body>
+</html>
