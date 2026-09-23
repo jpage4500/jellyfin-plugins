@@ -46,6 +46,10 @@ single URL**, so `manifest.json` lives at the repo root and lists every plugin. 
   A directory is a plugin if it has one; the scripts discover them, so adding a second plugin
   means adding that file and nothing else.
 - `<plugin>/test-server.sh` — stays with its plugin; it mounts that plugin's build output.
+- `<plugin>/icon.png` — optional, named by `icon` in plugin.json. Goes into the zip with
+  `imagePath` in its `meta.json` (so a manual install shows it) and is advertised in the
+  repository manifest as `imageUrl` by raw URL (so it shows in the catalogue before install).
+  Both keys are omitted if the file is missing.
 
 Plugins release independently: versions are tracked per GUID in the manifest and tags are
 prefixed with the plugin id (`favorites-exporter-v1.0.1.0`), so releasing one never disturbs
@@ -60,7 +64,9 @@ Other things that will bite:
   the manifest entry are generated in one step — editing either by hand breaks installs.
 - The assembly must sit at the root of the zip; Jellyfin unpacks it straight into the plugin folder.
 - `targetAbi` is the *minimum server version*, not the plugin version. Too high and older servers
-  never see the release; too low and they install it and fail at load.
+  never see the release; too low and they install it and fail at load. A plugin silently missing
+  from a server's catalogue is almost always this: the server filters out every version whose
+  targetAbi is newer than itself, and reports nothing.
 
 ## Architecture
 

@@ -36,6 +36,7 @@ if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "${PLUGIN_JSON}" "$1"; }
+field_optional() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], ""))' "${PLUGIN_JSON}" "$1"; }
 
 ID="$(field id)"
 NAME="$(field name)"
@@ -50,6 +51,16 @@ FRAMEWORK="$(field framework)"
 # newer than the server asking, so raising it drops older servers -- but setting it below a
 # version you have actually run on lets the plugin install and then fail at load.
 TARGET_ABI="$(field targetAbi)"
+# Optional icon: a file next to plugin.json. It goes into the zip (so a manual install shows
+# it too) and is advertised in the manifest by raw URL (so it shows in the catalogue before
+# anything is installed). Absent, both keys are simply left out.
+ICON="$(field_optional icon)"
+ICON_PATH=""
+if [[ -n "${ICON}" && -f "${PLUGIN_DIR}/${ICON}" ]]; then
+    ICON_PATH="${ICON}"
+elif [[ -n "${ICON}" ]]; then
+    echo "    note: plugin.json names ${ICON} but ${PLUGIN_DIR}/${ICON} does not exist; releasing without an icon" >&2
+fi
 
 SLUG="$(git remote get-url origin | sed -E 's#(git@github\.com:|https://github\.com/)##; s#\.git$##')"
 OWNER="${SLUG%%/*}"
@@ -57,6 +68,7 @@ OWNER="${SLUG%%/*}"
 TAG="${ID}-v${VERSION}"
 ZIP_NAME="${ID}_${VERSION}.zip"
 SOURCE_URL="https://github.com/${SLUG}/releases/download/${TAG}/${ZIP_NAME}"
+BRANCH="$(git symbolic-ref --short HEAD)"
 TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 echo "==> building ${NAME} ${VERSION}"
@@ -71,12 +83,18 @@ trap 'rm -rf "${STAGE}"' EXIT
 # root of the archive, not inside a directory.
 cp "${PLUGIN_DIR}/bin/Release/${FRAMEWORK}/${ASSEMBLY}" "${STAGE}/"
 
-CHANGELOG="${CHANGELOG:-}" ASSEMBLY="${ASSEMBLY}" CATEGORY="${CATEGORY}" \
+IMAGE_URL=""
+if [[ -n "${ICON_PATH}" ]]; then
+    cp "${PLUGIN_DIR}/${ICON_PATH}" "${STAGE}/"
+    IMAGE_URL="https://raw.githubusercontent.com/${SLUG}/${BRANCH}/${PLUGIN_DIR}/${ICON_PATH}"
+fi
+
+CHANGELOG="${CHANGELOG:-}" ASSEMBLY="${ASSEMBLY}" CATEGORY="${CATEGORY}" ICON_PATH="${ICON_PATH}" \
 DESCRIPTION="${DESCRIPTION}" GUID="${GUID}" NAME="${NAME}" OVERVIEW="${OVERVIEW}" \
 OWNER="${OWNER}" TARGET_ABI="${TARGET_ABI}" TIMESTAMP="${TIMESTAMP}" VERSION="${VERSION}" \
 python3 - "${STAGE}/meta.json" <<'PY'
 import json, os, sys
-json.dump({
+manifest = {
     "category": os.environ["CATEGORY"],
     "changelog": os.environ["CHANGELOG"],
     "description": os.environ["DESCRIPTION"],
@@ -90,7 +108,10 @@ json.dump({
     "status": "Active",
     "autoUpdate": True,
     "assemblies": [os.environ["ASSEMBLY"]],
-}, open(sys.argv[1], "w"), indent=2)
+}
+if os.environ.get("ICON_PATH"):
+    manifest["imagePath"] = os.environ["ICON_PATH"]
+json.dump(manifest, open(sys.argv[1], "w"), indent=2)
 PY
 
 mkdir -p dist
@@ -107,7 +128,7 @@ fi
 echo "==> updating manifest.json"
 CATEGORY="${CATEGORY}" CHANGELOG="${CHANGELOG:-}" CHECKSUM="${CHECKSUM}" \
 DESCRIPTION="${DESCRIPTION}" GUID="${GUID}" NAME="${NAME}" OVERVIEW="${OVERVIEW}" \
-OWNER="${OWNER}" SOURCE_URL="${SOURCE_URL}" TARGET_ABI="${TARGET_ABI}" \
+OWNER="${OWNER}" SOURCE_URL="${SOURCE_URL}" TARGET_ABI="${TARGET_ABI}" IMAGE_URL="${IMAGE_URL}" \
 TIMESTAMP="${TIMESTAMP}" VERSION="${VERSION}" python3 - <<'PY'
 import json, os, pathlib
 
@@ -126,6 +147,10 @@ plugin.update({
     "owner": os.environ["OWNER"],
     "category": os.environ["CATEGORY"],
 })
+if os.environ.get("IMAGE_URL"):
+    plugin["imageUrl"] = os.environ["IMAGE_URL"]
+else:
+    plugin.pop("imageUrl", None)
 
 entry = {
     "version": os.environ["VERSION"],
@@ -140,8 +165,8 @@ entry = {
 plugin["versions"] = [entry] + [v for v in plugin["versions"] if v["version"] != entry["version"]]
 
 # Key order matches the official repo manifest so diffs against it stay readable.
-ordered = [{k: p[k] for k in ("guid", "name", "description", "overview", "owner", "category", "versions")}
-           for p in manifest]
+keys = ("guid", "name", "description", "overview", "owner", "category", "imageUrl", "versions")
+ordered = [{k: p[k] for k in keys if k in p} for p in manifest]
 manifest_path.write_text(json.dumps(ordered, indent=4) + "\n")
 PY
 
