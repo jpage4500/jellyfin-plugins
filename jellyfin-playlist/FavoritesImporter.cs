@@ -162,6 +162,7 @@ namespace JellyfinPlaylist
     public sealed class ImportResultJson
     {
         public string User { get; set; } = string.Empty;
+        public string SourceServerName { get; set; } = string.Empty;
         public DateTime? GeneratedAtUtc { get; set; }
         public ImportCategoryJson Tracks { get; set; } = new();
         public ImportCategoryJson Albums { get; set; } = new();

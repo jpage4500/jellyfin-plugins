@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities.Audio;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Entities;
@@ -17,11 +18,16 @@ namespace JellyfinPlaylist
     {
         private readonly IUserManager _userManager;
         private readonly ILibraryManager _libraryManager;
+        private readonly IServerApplicationHost _applicationHost;
 
-        public FavoritesExportTask(IUserManager userManager, ILibraryManager libraryManager)
+        public FavoritesExportTask(
+            IUserManager userManager,
+            ILibraryManager libraryManager,
+            IServerApplicationHost applicationHost)
         {
             _userManager = userManager;
             _libraryManager = libraryManager;
+            _applicationHost = applicationHost;
         }
 
         public string Name => "Export Favorites to M3U";
@@ -31,6 +37,20 @@ namespace JellyfinPlaylist
 
         public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         {
+            Export(cancellationToken);
+
+            return Task.CompletedTask;
+        }
+
+        public ExportResultJson Export(CancellationToken cancellationToken)
+        {
+            if (!PlaylistLocator.TryPrepareDirectory(_libraryManager, out var playlistDirectory, out var error))
+            {
+                throw new InvalidOperationException(error);
+            }
+
+            var serverName = _applicationHost.FriendlyName;
+
             var favoriteTracks = new Dictionary<string, Audio>(StringComparer.OrdinalIgnoreCase);
             var favoriteAlbums = new Dictionary<Guid, MusicAlbum>();
             var favoriteArtists = new Dictionary<Guid, MusicArtist>();
@@ -82,31 +102,37 @@ namespace JellyfinPlaylist
                     .Where(track => track.Artists.Any(artist => pair.Value.Name.Equals(artist, StringComparison.OrdinalIgnoreCase)))
                     .ToList());
 
-            var playlistDirectory = PlaylistLocator.GetPlaylistDirectory(_libraryManager);
-            if (string.IsNullOrEmpty(playlistDirectory))
-            {
-                return Task.CompletedTask;
-            }
+            var playlistsWritten = 0;
 
-            Directory.CreateDirectory(playlistDirectory);
+            // Scoped to this server: several servers can share one media folder, and the last one
+            // to export would otherwise overwrite everyone else's list.
+            WritePlaylist(
+                Path.Combine(playlistDirectory, PlaylistLocator.FavoritesPlaylistFileName(serverName)),
+                playlistDirectory,
+                favoriteTracks.Values);
+            playlistsWritten++;
 
-            WritePlaylist(Path.Combine(playlistDirectory, "Favorites.m3u"), playlistDirectory, favoriteTracks.Values);
-
+            // Not scoped: an album playlist's contents depend on the album, not on who wrote it,
+            // so two servers producing the same file is harmless.
             foreach (var album in favoriteAlbums.Values)
             {
                 var artistName = album.AlbumArtists.FirstOrDefault() ?? "Unknown Artist";
-                var filename = SanitizeFilename($"{artistName} - {album.Name}.m3u");
+                var filename = PlaylistLocator.SanitizeFilename($"{artistName} - {album.Name}.m3u");
                 WritePlaylist(Path.Combine(playlistDirectory, filename), playlistDirectory, albumTracks[album.Id]);
+                playlistsWritten++;
             }
 
             foreach (var artist in favoriteArtists.Values)
             {
-                var filename = SanitizeFilename($"{artist.Name}.m3u");
+                var filename = PlaylistLocator.SanitizeFilename($"{artist.Name}.m3u");
                 WritePlaylist(Path.Combine(playlistDirectory, filename), playlistDirectory, artistTracks[artist.Id]);
+                playlistsWritten++;
             }
 
             var export = new FavoritesJson
             {
+                ServerId = _applicationHost.SystemId,
+                ServerName = serverName,
                 GeneratedAtUtc = DateTime.UtcNow,
                 Tracks = favoriteTracks.Values.Select(track => ToTrackExport(track, playlistDirectory)).ToList(),
                 Albums = favoriteAlbums.Values.Select(album => new FavoriteAlbumJson
@@ -124,11 +150,21 @@ namespace JellyfinPlaylist
                 }).ToList()
             };
 
+            var manifestFileName = PlaylistLocator.ManifestFileName(serverName);
             File.WriteAllText(
-                Path.Combine(playlistDirectory, PlaylistLocator.ManifestFileName),
+                Path.Combine(playlistDirectory, manifestFileName),
                 JsonSerializer.Serialize(export, new JsonSerializerOptions { WriteIndented = true }));
 
-            return Task.CompletedTask;
+            return new ExportResultJson
+            {
+                ServerName = serverName,
+                PlaylistDirectory = playlistDirectory,
+                ManifestFileName = manifestFileName,
+                Tracks = export.Tracks.Count,
+                Albums = export.Albums.Count,
+                Artists = export.Artists.Count,
+                PlaylistsWritten = playlistsWritten
+            };
         }
 
         private List<Audio> GetAlbumTracks(MusicAlbum album)
@@ -162,12 +198,6 @@ namespace JellyfinPlaylist
             };
         }
 
-        private static string SanitizeFilename(string filename)
-        {
-            var invalidCharacters = Path.GetInvalidFileNameChars().Concat(new[] { ':', '*', '?', '"', '<', '>', '|', '/' }).ToHashSet();
-            return string.Concat(filename.Select(character => invalidCharacters.Contains(character) ? '_' : character));
-        }
-
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
         {
             return new[]
@@ -181,8 +211,22 @@ namespace JellyfinPlaylist
         }
     }
 
+    public sealed class ExportResultJson
+    {
+        public string ServerName { get; set; } = string.Empty;
+        public string PlaylistDirectory { get; set; } = string.Empty;
+        public string ManifestFileName { get; set; } = string.Empty;
+        public int Tracks { get; set; }
+        public int Albums { get; set; }
+        public int Artists { get; set; }
+        public int PlaylistsWritten { get; set; }
+    }
+
     internal sealed class FavoritesJson
     {
+        /// <summary>Stable across renames, so a manifest can still be attributed to its server.</summary>
+        public string ServerId { get; set; } = string.Empty;
+        public string ServerName { get; set; } = string.Empty;
         public DateTime GeneratedAtUtc { get; set; }
         public List<FavoriteTrackJson> Tracks { get; set; } = new();
         public List<FavoriteAlbumJson> Albums { get; set; } = new();

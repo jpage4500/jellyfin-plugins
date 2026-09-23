@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using MediaBrowser.Controller;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Net;
 using System.Threading;
@@ -26,17 +27,20 @@ namespace JellyfinPlaylist
         private readonly IUserManager _userManager;
         private readonly IUserDataManager _userDataManager;
         private readonly IAuthorizationContext _authorizationContext;
+        private readonly IServerApplicationHost _applicationHost;
 
         public FavoritesController(
             ILibraryManager libraryManager,
             IUserManager userManager,
             IUserDataManager userDataManager,
-            IAuthorizationContext authorizationContext)
+            IAuthorizationContext authorizationContext,
+            IServerApplicationHost applicationHost)
         {
             _libraryManager = libraryManager;
             _userManager = userManager;
             _userDataManager = userDataManager;
             _authorizationContext = authorizationContext;
+            _applicationHost = applicationHost;
         }
 
         // Endpoint to list the generated playlists
@@ -68,23 +72,99 @@ namespace JellyfinPlaylist
             return Ok(playlists);
         }
 
+        /// <summary>
+        /// Every Favorites*.json sitting in the playlists folder, whichever server wrote it.
+        /// Servers can share a media folder, so this is how a user picks which one to import.
+        /// </summary>
+        [HttpGet("Manifests")]
+        public ActionResult<IEnumerable<ManifestSummaryJson>> GetManifests()
+        {
+            var playlistDirectory = PlaylistLocator.GetPlaylistDirectory(_libraryManager);
+            if (string.IsNullOrEmpty(playlistDirectory) || !Directory.Exists(playlistDirectory))
+            {
+                return Ok(Array.Empty<ManifestSummaryJson>());
+            }
+
+            var pattern = PlaylistLocator.ManifestPrefix + "*" + PlaylistLocator.ManifestExtension;
+            var summaries = Directory.EnumerateFiles(playlistDirectory, pattern, SearchOption.TopDirectoryOnly)
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .Select(path => Summarize(path))
+                .Where(summary => summary is not null)
+                .Select(summary => summary!)
+                .OrderByDescending(summary => summary.IsThisServer)
+                .ThenByDescending(summary => summary.GeneratedAtUtc)
+                .ToList();
+
+            return Ok(summaries);
+        }
+
+        private ManifestSummaryJson? Summarize(string path)
+        {
+            try
+            {
+                var manifest = JsonSerializer.Deserialize<FavoritesJson>(
+                    System.IO.File.ReadAllText(path), ManifestOptions);
+                if (manifest is null)
+                {
+                    return null;
+                }
+
+                var fileName = Path.GetFileName(path);
+
+                return new ManifestSummaryJson
+                {
+                    FileName = fileName,
+                    // A manifest written before servers were scoped carries no name; fall back to
+                    // the filename so it is still selectable rather than appearing blank.
+                    ServerName = string.IsNullOrWhiteSpace(manifest.ServerName)
+                        ? Path.GetFileNameWithoutExtension(fileName)
+                        : manifest.ServerName,
+                    ServerId = manifest.ServerId,
+                    IsThisServer = !string.IsNullOrEmpty(manifest.ServerId)
+                        && string.Equals(manifest.ServerId, _applicationHost.SystemId, StringComparison.OrdinalIgnoreCase),
+                    GeneratedAtUtc = manifest.GeneratedAtUtc,
+                    Tracks = manifest.Tracks.Count,
+                    Albums = manifest.Albums.Count,
+                    Artists = manifest.Artists.Count
+                };
+            }
+            catch (Exception exception) when (exception is JsonException or IOException)
+            {
+                return null;
+            }
+        }
+
         // Endpoint to trigger the export manually
         [HttpPost("Export")]
-        public async Task<ActionResult> ExportNow()
+        public ActionResult<ExportResultJson> ExportNow(CancellationToken cancellationToken)
         {
-            var exportTask = new FavoritesExportTask(_userManager, _libraryManager);
-            await exportTask.ExecuteAsync(new Progress<double>(), CancellationToken.None);
-            return Ok(new { message = "Export task completed." });
+            if (!PlaylistLocator.TryPrepareDirectory(_libraryManager, out _, out var error))
+            {
+                return BadRequest(new { message = error });
+            }
+
+            var exportTask = new FavoritesExportTask(_userManager, _libraryManager, _applicationHost);
+
+            try
+            {
+                return Ok(exportTask.Export(cancellationToken));
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+            {
+                return BadRequest(new { message = "Export failed while writing playlists: " + exception.Message });
+            }
         }
 
         /// <summary>
-        /// Replays the Favorites.json sitting in the playlists folder, favoriting the same items
-        /// on this server. Favorites are per-user in Jellyfin but the export merges every user's,
-        /// so the import targets a single user: the caller, unless <paramref name="userId"/> says
-        /// otherwise. It only ever adds favorites -- nothing is un-favorited.
+        /// Replays one manifest onto this server, favoriting the same items. Favorites are per-user
+        /// in Jellyfin but the export merges every user's, so the import targets a single user: the
+        /// caller, unless <paramref name="userId"/> says otherwise. It only ever adds favorites.
         /// </summary>
         [HttpPost("Import")]
-        public async Task<ActionResult<ImportResultJson>> ImportNow([FromQuery] Guid? userId, CancellationToken cancellationToken)
+        public async Task<ActionResult<ImportResultJson>> ImportNow(
+            [FromQuery] string? file,
+            [FromQuery] Guid? userId,
+            CancellationToken cancellationToken)
         {
             var authorizationInfo = await _authorizationContext.GetAuthorizationInfo(Request).ConfigureAwait(false);
             var targetUserId = userId ?? authorizationInfo.UserId;
@@ -95,15 +175,18 @@ namespace JellyfinPlaylist
                 return NotFound(new { message = "Could not determine which user to import favorites for." });
             }
 
-            var manifestPath = PlaylistLocator.GetManifestPath(_libraryManager);
-            if (string.IsNullOrEmpty(manifestPath))
+            var playlistDirectory = PlaylistLocator.GetPlaylistDirectory(_libraryManager);
+            if (string.IsNullOrEmpty(playlistDirectory) || !Directory.Exists(playlistDirectory))
             {
-                return NotFound(new { message = "No music library was found to import into." });
+                return NotFound(new { message = "No playlists folder was found to import from." });
             }
 
-            if (!System.IO.File.Exists(manifestPath))
+            // The name comes from the browser, so it is validated against the folder rather than
+            // trusted -- a bare filename is still a path-traversal vector.
+            if (string.IsNullOrWhiteSpace(file)
+                || !PlaylistLocator.TryResolveManifest(playlistDirectory, file, out var manifestPath))
             {
-                return NotFound(new { message = "No " + PlaylistLocator.ManifestFileName + " found at " + manifestPath + "." });
+                return NotFound(new { message = $"No manifest named '{file}' in {playlistDirectory}." });
             }
 
             FavoritesJson? manifest;
@@ -124,9 +207,23 @@ namespace JellyfinPlaylist
             }
 
             var importer = new FavoritesImporter(_libraryManager, _userDataManager);
+            var result = importer.Import(user, manifest, cancellationToken);
+            result.SourceServerName = string.IsNullOrWhiteSpace(manifest.ServerName) ? file : manifest.ServerName;
 
-            return Ok(importer.Import(user, manifest, cancellationToken));
+            return Ok(result);
         }
+    }
+
+    public sealed class ManifestSummaryJson
+    {
+        public string FileName { get; set; } = string.Empty;
+        public string ServerName { get; set; } = string.Empty;
+        public string ServerId { get; set; } = string.Empty;
+        public bool IsThisServer { get; set; }
+        public DateTime GeneratedAtUtc { get; set; }
+        public int Tracks { get; set; }
+        public int Albums { get; set; }
+        public int Artists { get; set; }
     }
 
     public sealed class GeneratedPlaylist

@@ -5,8 +5,10 @@
     <title>Favorites Exporter</title>
 </head>
 <body>
-    <div id="FavoritesExporterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-button">
+    <div id="FavoritesExporterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-button,emby-input">
         <style>
+            #FavoritesExporterConfigPage .favExpSection { max-width: 46em; }
+
             #FavoritesExporterConfigPage .favExpTree {
                 margin: 0;
                 padding: 0;
@@ -24,9 +26,7 @@
                 list-style: none;
             }
 
-            #FavoritesExporterConfigPage .favExpNode > summary::-webkit-details-marker {
-                display: none;
-            }
+            #FavoritesExporterConfigPage .favExpNode > summary::-webkit-details-marker { display: none; }
 
             #FavoritesExporterConfigPage .favExpNode > summary:hover {
                 background: rgba(127, 127, 127, .14);
@@ -45,9 +45,7 @@
                 transition: transform .12s ease;
             }
 
-            #FavoritesExporterConfigPage .favExpNode[open] > summary::before {
-                transform: rotate(90deg);
-            }
+            #FavoritesExporterConfigPage .favExpNode[open] > summary::before { transform: rotate(90deg); }
 
             #FavoritesExporterConfigPage .favExpLabel {
                 overflow: hidden;
@@ -55,9 +53,7 @@
                 white-space: nowrap;
             }
 
-            #FavoritesExporterConfigPage .favExpPlaylist > summary .favExpLabel {
-                font-weight: 500;
-            }
+            #FavoritesExporterConfigPage .favExpPlaylist > summary .favExpLabel { font-weight: 500; }
 
             #FavoritesExporterConfigPage .favExpFolder > summary .favExpLabel {
                 font-size: .92em;
@@ -72,7 +68,6 @@
                 opacity: .55;
             }
 
-            /* Indent guide down the left of each nested level. */
             #FavoritesExporterConfigPage .favExpNode > .favExpTrackList,
             #FavoritesExporterConfigPage .favExpPlaylist > .favExpFolder {
                 margin: 0 0 0 .8em;
@@ -80,9 +75,7 @@
                 border-left: 1px solid rgba(127, 127, 127, .35);
             }
 
-            #FavoritesExporterConfigPage .favExpTrackList {
-                list-style: none;
-            }
+            #FavoritesExporterConfigPage .favExpTrackList { list-style: none; }
 
             #FavoritesExporterConfigPage .favExpTrack {
                 padding: .12em .4em;
@@ -96,7 +89,7 @@
 
             #FavoritesExporterConfigPage .favExpResult {
                 max-width: 46em;
-                margin-top: 1.2em;
+                margin-top: 1em;
                 padding: .8em 1em;
                 border-radius: .25em;
                 background: rgba(127, 127, 127, .14);
@@ -132,6 +125,41 @@
                 font-size: .9em;
                 opacity: .6;
             }
+
+            /* One row per Favorites-<server>.json found in the playlists folder. */
+            #FavoritesExporterConfigPage .favExpManifest {
+                display: flex;
+                align-items: center;
+                gap: 1em;
+                max-width: 46em;
+                padding: .6em .2em;
+                border-bottom: 1px solid rgba(127, 127, 127, .25);
+            }
+
+            #FavoritesExporterConfigPage .favExpManifestText { min-width: 0; }
+
+            #FavoritesExporterConfigPage .favExpManifestName {
+                display: flex;
+                align-items: baseline;
+                gap: .5em;
+                font-weight: 500;
+            }
+
+            #FavoritesExporterConfigPage .favExpBadge {
+                padding: .1em .45em;
+                border-radius: .8em;
+                background: rgba(127, 127, 127, .3);
+                font-size: .72em;
+                font-weight: 400;
+                opacity: .85;
+            }
+
+            #FavoritesExporterConfigPage .favExpManifestMeta {
+                font-size: .85em;
+                opacity: .6;
+            }
+
+            #FavoritesExporterConfigPage .favExpManifestAction { margin-left: auto; flex: none; }
         </style>
 
         <div data-role="content">
@@ -140,16 +168,39 @@
                 <h1>Favorites Exporter</h1>
                 <p>Manage and backup your favorited music to portable .m3u playlists.</p>
 
+                <div class="favExpSection" style="margin-top: 1.5em;">
+                    <div class="inputContainer">
+                        <label class="inputLabel" for="txtPlaylistPath">Playlist folder</label>
+                        <input is="emby-input" type="text" id="txtPlaylistPath" class="emby-input"
+                               placeholder="Leave empty to use the music library" />
+                        <div class="fieldDescription">
+                            Where playlists are written. Leave empty to put them in a
+                            <code>playlists</code> folder beside your music. Set a path here if the
+                            media folder is read-only, such as a network share.
+                        </div>
+                    </div>
+                    <button is="emby-button" type="button" class="raised block emby-button" id="btnSave">
+                        <span>Save</span>
+                    </button>
+                </div>
+
                 <div style="margin-top: 2em; display: flex; gap: 1em;">
                     <button is="emby-button" type="button" class="raised button-submit block emby-button" id="btnExport">
                         <span>Export Favorites Now</span>
                     </button>
-                    <button is="emby-button" type="button" class="raised block emby-button" id="btnImport">
-                        <span>Import Favorites from JSON</span>
-                    </button>
                 </div>
 
-                <div id="importResult" class="favExpResult" hidden></div>
+                <div id="actionResult" class="favExpResult" hidden></div>
+
+                <h2 style="margin-top: 2em;">Import Favorites</h2>
+                <p style="font-size: .92em; opacity: .7; max-width: 46em;">
+                    Each server writes its own <code>Favorites-&lt;server&gt;.json</code>. Importing one
+                    favorites the same tracks, albums and artists here for your account. Nothing is ever
+                    un-favorited.
+                </p>
+                <div id="manifestContainer">
+                    <p>Loading...</p>
+                </div>
 
                 <h2 style="margin-top: 2em;">Generated Playlists Found</h2>
                 <div id="playlistContainer" class="favExpTree">
@@ -187,8 +238,201 @@
                     return value === undefined || value === null ? object[upper] : value;
                 },
 
-                // "../Trent Reznor/The Social Network/03 - A Familiar Taste.mp3"
-                //   -> "Trent Reznor/The Social Network"
+                formatDate: function (value) {
+                    if (!value) { return 'unknown date'; }
+                    var date = new Date(value);
+                    return isNaN(date.getTime()) ? 'unknown date' : date.toLocaleString();
+                },
+
+                setBusy: function (button, busy, busyLabel) {
+                    button.disabled = busy;
+                    var span = button.querySelector('span') || button;
+                    if (busy) {
+                        button.dataset.idleLabel = span.textContent;
+                        span.textContent = busyLabel;
+                    } else if (button.dataset.idleLabel) {
+                        span.textContent = button.dataset.idleLabel;
+                    }
+                },
+
+                showResult: function (html) {
+                    var container = document.querySelector('#actionResult');
+                    container.innerHTML = html;
+                    container.hidden = false;
+                },
+
+                showError: function (error, fallback) {
+                    // Jellyfin rejects with the failed Response, which carries the reason.
+                    if (error && typeof error.json === 'function') {
+                        error.json().then(function (body) {
+                            FavoritesExporterConfig.showResult('<p>' + FavoritesExporterConfig.escapeHtml(
+                                FavoritesExporterConfig.pick(body || {}, 'message') || fallback) + '</p>');
+                        }, function () {
+                            FavoritesExporterConfig.showResult('<p>' + fallback + '</p>');
+                        });
+                        return;
+                    }
+                    FavoritesExporterConfig.showResult('<p>' + fallback + '</p>');
+                },
+
+                row: function (label, text) {
+                    var esc = FavoritesExporterConfig.escapeHtml;
+                    return '<div class="favExpResultRow"><span>' + esc(label) + '</span>' +
+                        '<span>' + esc(text) + '</span></div>';
+                },
+
+                // ---- configuration -------------------------------------------------------
+                loadConfig: function () {
+                    ApiClient.getPluginConfiguration(FavoritesExporterConfig.pluginUniqueId).then(function (config) {
+                        document.querySelector('#txtPlaylistPath').value =
+                            FavoritesExporterConfig.pick(config, 'playlistPath') || '';
+                    });
+                },
+
+                saveConfig: function () {
+                    var value = document.querySelector('#txtPlaylistPath').value.trim();
+                    ApiClient.getPluginConfiguration(FavoritesExporterConfig.pluginUniqueId).then(function (config) {
+                        // Set both spellings: the server binds whichever its serializer expects.
+                        config.PlaylistPath = value;
+                        config.playlistPath = value;
+                        ApiClient.updatePluginConfiguration(FavoritesExporterConfig.pluginUniqueId, config)
+                            .then(function (result) {
+                                Dashboard.processPluginConfigurationUpdateResult(result);
+                                FavoritesExporterConfig.loadManifests();
+                                FavoritesExporterConfig.loadPlaylists();
+                            });
+                    });
+                },
+
+                // ---- export --------------------------------------------------------------
+                runExport: function (button) {
+                    FavoritesExporterConfig.setBusy(button, true, 'Exporting...');
+                    FavoritesExporterConfig.showResult('<p>Exporting...</p>');
+
+                    ApiClient.ajax({
+                        type: "POST",
+                        url: ApiClient.getUrl("Plugin/FavoritesExporter/Export"),
+                        dataType: "json"
+                    }).then(function (result) {
+                        FavoritesExporterConfig.setBusy(button, false);
+                        var pick = FavoritesExporterConfig.pick;
+                        FavoritesExporterConfig.showResult(
+                            '<h3>Exported favorites for ' +
+                            FavoritesExporterConfig.escapeHtml(pick(result, 'serverName')) + '</h3>' +
+                            FavoritesExporterConfig.row('Wrote', pick(result, 'playlistsWritten') +
+                                ' playlist file(s) and ' + pick(result, 'manifestFileName')) +
+                            FavoritesExporterConfig.row('Folder', pick(result, 'playlistDirectory')) +
+                            FavoritesExporterConfig.row('Favorites', pick(result, 'tracks') + ' tracks, ' +
+                                pick(result, 'albums') + ' albums, ' + pick(result, 'artists') + ' artists'));
+                        FavoritesExporterConfig.loadManifests();
+                        FavoritesExporterConfig.loadPlaylists();
+                    }, function (error) {
+                        FavoritesExporterConfig.setBusy(button, false);
+                        FavoritesExporterConfig.showError(error, 'Export failed.');
+                    });
+                },
+
+                // ---- import --------------------------------------------------------------
+                loadManifests: function () {
+                    ApiClient.getJSON(ApiClient.getUrl("Plugin/FavoritesExporter/Manifests")).then(function (manifests) {
+                        var esc = FavoritesExporterConfig.escapeHtml;
+                        var pick = FavoritesExporterConfig.pick;
+                        var container = document.querySelector('#manifestContainer');
+
+                        if (!manifests || manifests.length === 0) {
+                            container.innerHTML = '<p style="opacity:.7">No exported favorites found yet. ' +
+                                'Run an export here, or point this server at a folder another server has exported to.</p>';
+                            return;
+                        }
+
+                        container.innerHTML = manifests.map(function (manifest) {
+                            var file = pick(manifest, 'fileName') || '';
+                            var badge = pick(manifest, 'isThisServer')
+                                ? '<span class="favExpBadge">this server</span>' : '';
+                            var meta = FavoritesExporterConfig.formatDate(pick(manifest, 'generatedAtUtc')) +
+                                '  ·  ' + pick(manifest, 'tracks') + ' tracks, ' +
+                                pick(manifest, 'albums') + ' albums, ' +
+                                pick(manifest, 'artists') + ' artists';
+                            return '<div class="favExpManifest">' +
+                                '<div class="favExpManifestText">' +
+                                '<div class="favExpManifestName">' + esc(pick(manifest, 'serverName')) + badge + '</div>' +
+                                '<div class="favExpManifestMeta">' + esc(meta) + '</div>' +
+                                '</div>' +
+                                '<button is="emby-button" type="button" class="raised emby-button favExpManifestAction" ' +
+                                'data-manifest="' + esc(file) + '"><span>Import</span></button>' +
+                                '</div>';
+                        }).join('');
+
+                        container.querySelectorAll('[data-manifest]').forEach(function (button) {
+                            button.addEventListener('click', function () {
+                                FavoritesExporterConfig.runImport(button, button.dataset.manifest);
+                            });
+                        });
+                    }).catch(function () {
+                        document.querySelector('#manifestContainer').innerHTML =
+                            '<p>Unable to list exported favorites.</p>';
+                    });
+                },
+
+                runImport: function (button, file) {
+                    if (!confirm('Favorite everything listed in ' + file + ' for your account?')) {
+                        return;
+                    }
+
+                    FavoritesExporterConfig.setBusy(button, true, 'Importing...');
+                    FavoritesExporterConfig.showResult('<p>Importing...</p>');
+
+                    ApiClient.ajax({
+                        type: "POST",
+                        url: ApiClient.getUrl("Plugin/FavoritesExporter/Import", { file: file }),
+                        dataType: "json"
+                    }).then(function (result) {
+                        FavoritesExporterConfig.setBusy(button, false);
+                        FavoritesExporterConfig.renderImportResult(result);
+                    }, function (error) {
+                        FavoritesExporterConfig.setBusy(button, false);
+                        FavoritesExporterConfig.showError(error, 'Import failed.');
+                    });
+                },
+
+                importSummaryRow: function (label, category) {
+                    var pick = FavoritesExporterConfig.pick;
+                    return FavoritesExporterConfig.row(label, [
+                        pick(category, 'favorited') + ' newly favorited',
+                        pick(category, 'alreadyFavorite') + ' already',
+                        pick(category, 'notFound') + ' not found'
+                    ].join('  ·  '));
+                },
+
+                renderImportResult: function (result) {
+                    var esc = FavoritesExporterConfig.escapeHtml;
+                    var pick = FavoritesExporterConfig.pick;
+                    var categories = [
+                        ['Tracks', pick(result, 'tracks')],
+                        ['Albums', pick(result, 'albums')],
+                        ['Artists', pick(result, 'artists')]
+                    ];
+
+                    var html = '<h3>Imported from ' + esc(pick(result, 'sourceServerName')) +
+                        ' for ' + esc(pick(result, 'user')) + '</h3>' +
+                        categories.map(function (entry) {
+                            return FavoritesExporterConfig.importSummaryRow(entry[0], entry[1]);
+                        }).join('');
+
+                    // Anything the manifest listed that this library has no counterpart for --
+                    // usually a track the server has not scanned, or a different tagging of it.
+                    var missing = categories.reduce(function (all, entry) {
+                        return all.concat(pick(entry[1], 'missing') || []);
+                    }, []);
+                    if (missing.length > 0) {
+                        html += '<p class="favExpResultNote">Not matched in this library: ' +
+                            esc(missing.join(', ')) + '</p>';
+                    }
+
+                    FavoritesExporterConfig.showResult(html);
+                },
+
+                // ---- generated playlists -------------------------------------------------
                 folderOf: function (path) {
                     var normalized = String(path).replace(/\\/g, '/');
                     var index = normalized.lastIndexOf('/');
@@ -259,51 +503,6 @@
                         '</details>';
                 },
 
-                showImportMessage: function (html) {
-                    var container = document.querySelector('#importResult');
-                    container.innerHTML = html;
-                    container.hidden = false;
-                },
-
-                importSummaryRow: function (label, category) {
-                    var esc = FavoritesExporterConfig.escapeHtml;
-                    var pick = FavoritesExporterConfig.pick;
-                    var parts = [
-                        pick(category, 'favorited') + ' newly favorited',
-                        pick(category, 'alreadyFavorite') + ' already',
-                        pick(category, 'notFound') + ' not found'
-                    ];
-                    return '<div class="favExpResultRow"><span>' + esc(label) + '</span>' +
-                        '<span>' + esc(parts.join('  \u00b7  ')) + '</span></div>';
-                },
-
-                renderImportResult: function (result) {
-                    var esc = FavoritesExporterConfig.escapeHtml;
-                    var pick = FavoritesExporterConfig.pick;
-                    var categories = [
-                        ['Tracks', pick(result, 'tracks')],
-                        ['Albums', pick(result, 'albums')],
-                        ['Artists', pick(result, 'artists')]
-                    ];
-
-                    var html = '<h3>Imported favorites for ' + esc(pick(result, 'user')) + '</h3>' +
-                        categories.map(function (entry) {
-                            return FavoritesExporterConfig.importSummaryRow(entry[0], entry[1]);
-                        }).join('');
-
-                    // Anything the manifest listed that this library has no counterpart for --
-                    // usually a track the server has not scanned, or a different tagging of it.
-                    var missing = categories.reduce(function (all, entry) {
-                        return all.concat(pick(entry[1], 'missing') || []);
-                    }, []);
-                    if (missing.length > 0) {
-                        html += '<p class="favExpResultNote">Not matched in this library: ' +
-                            esc(missing.join(', ')) + '</p>';
-                    }
-
-                    FavoritesExporterConfig.showImportMessage(html);
-                },
-
                 loadPlaylists: function () {
                     ApiClient.getJSON(ApiClient.getUrl("Plugin/FavoritesExporter/Playlists")).then(function (playlists) {
                         document.querySelector('#playlistContainer').innerHTML = playlists.length === 0
@@ -317,52 +516,16 @@
 
             // Event listener for when the Jellyfin UI loads this page
             document.querySelector('#FavoritesExporterConfigPage').addEventListener('pageshow', function () {
+                FavoritesExporterConfig.loadConfig();
+                FavoritesExporterConfig.loadManifests();
                 FavoritesExporterConfig.loadPlaylists();
 
-                // Wire up the Export button
-                document.querySelector('#btnExport').addEventListener('click', function () {
-                    ApiClient.ajax({
-                        type: "POST",
-                        url: ApiClient.getUrl("Plugin/FavoritesExporter/Export")
-                    }).then(function () {
-                        Dashboard.alert("Export completed.");
-                        FavoritesExporterConfig.loadPlaylists();
-                    });
+                document.querySelector('#btnSave').addEventListener('click', function () {
+                    FavoritesExporterConfig.saveConfig();
                 });
 
-                // Wire up the Import button
-                document.querySelector('#btnImport').addEventListener('click', function () {
-                    if (!confirm('Favorite every track, album and artist listed in Favorites.json for your account?')) {
-                        return;
-                    }
-
-                    var button = this;
-                    button.disabled = true;
-                    FavoritesExporterConfig.showImportMessage('<p>Importing...</p>');
-
-                    ApiClient.ajax({
-                        type: "POST",
-                        url: ApiClient.getUrl("Plugin/FavoritesExporter/Import"),
-                        dataType: "json"
-                    }).then(function (result) {
-                        button.disabled = false;
-                        FavoritesExporterConfig.renderImportResult(result);
-                    }, function (error) {
-                        button.disabled = false;
-                        // Jellyfin rejects with the failed Response, which carries the reason.
-                        if (error && typeof error.json === 'function') {
-                            error.json().then(function (body) {
-                                FavoritesExporterConfig.showImportMessage('<p>' +
-                                    FavoritesExporterConfig.escapeHtml(
-                                        FavoritesExporterConfig.pick(body || {}, 'message') || 'Import failed.') +
-                                    '</p>');
-                            }, function () {
-                                FavoritesExporterConfig.showImportMessage('<p>Import failed.</p>');
-                            });
-                            return;
-                        }
-                        FavoritesExporterConfig.showImportMessage('<p>Import failed.</p>');
-                    });
+                document.querySelector('#btnExport').addEventListener('click', function () {
+                    FavoritesExporterConfig.runExport(this);
                 });
             });
         </script>
