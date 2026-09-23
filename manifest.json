@@ -6,7 +6,16 @@
         "overview": "Back up and move your music favorites",
         "owner": "jpage4500",
         "category": "General",
+        "imageUrl": "https://raw.githubusercontent.com/jpage4500/jellyfin-plugins/main/jellyfin-playlist/icon.png",
         "versions": [
+            {
+                "version": "1.0.1.0",
+                "changelog": "add icon",
+                "targetAbi": "12.0.0.0",
+                "sourceUrl": "https://github.com/jpage4500/jellyfin-plugins/releases/download/favorites-exporter-v1.0.1.0/favorites-exporter_1.0.1.0.zip",
+                "checksum": "46dd8b11ea223102d6812726e887ed72",
+                "timestamp": "2026-09-23T16:02:24Z"
+            },
             {
                 "version": "1.0.0.0",
                 "changelog": "Initial version",
